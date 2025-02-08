@@ -1,21 +1,36 @@
 # tovideoencoder
-## This thing encode any file to .mkv video format using FFV1 codecs
-# INSTALLATION
-just 
-`git clone https://github.com/Razerpoa/tovideoencoder` 
-go to the directory and
-`python -m pip install requirements.txt`
-and run it
-`python main.py`
-# HOW TO USE
-## example
-encode
+
+## Overview
+`tovideoencoder` is a tool that encodes any file into an `.mkv` video format using the FFV1 codec.
+
+## Installation
+Clone the repository:
+```sh
+git clone https://github.com/Razerpoa/tovideoencoder
 ```
-python .\main.py encode my_groceries.txt groceries.mkv
+Navigate to the directory and install dependencies:
+```sh
+cd tovideoencoder
+python -m pip install -r requirements.txt
 ```
-decode
+Run the program:
+```sh
+python main.py
 ```
-python .\main.py decode groceries.mkv my_groceries.txt
+
+## Usage
+
+### Encoding a file
+To encode a file into an `.mkv` video:
+```sh
+python main.py encode my_groceries.txt groceries.mkv
 ```
-# LICENSE
-This piece of 0's and 1's is licensed under the MIT License
+
+### Decoding a file
+To decode an `.mkv` video back into its original file:
+```sh
+python main.py decode groceries.mkv my_groceries.txt
+```
+
+## License
+This project is licensed under the MIT License.
