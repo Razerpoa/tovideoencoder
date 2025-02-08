@@ -18,4 +18,4 @@ decode
 python .\main.py decode groceries.mkv my_groceries.txt
 ```
 # LICENSE
-This piece of 0's and 1's is using the MIT License 
+This piece of 0's and 1's is licensed under the MIT License
