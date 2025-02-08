@@ -2,139 +2,184 @@ import cv2
 import numpy as np
 import struct
 import math
+from reedsolo import RSCodec
 
-def encode_file_to_video(input_file, output_video, resolution=(512, 512), fps=60):
-    """
-    Encodes an arbitrary binary file into a video file.
-    
-    The file’s size (in bytes) is stored in an 8-byte header at the beginning.
-    Then the header and file bytes are split into chunks that exactly fill video frames.
-    Any leftover space in the final frame is zero-padded.
-    
-    Args:
-        input_file (str): Path to the file to encode.
-        output_video (str): Path to the output video file.
-        resolution (tuple): (width, height) in pixels for each video frame.
-        fps (int): Frames per second to use in the video.
-    """
-    width, height = resolution
-    capacity = width * height * 3  # Each frame holds this many bytes (3 channels per pixel)
-    
-    # Read the input file as binary
+# --- Configuration parameters ---
+FRAME_WIDTH = 512
+FRAME_HEIGHT = 512
+CELL_SIZE = 16                     # Each cell is 16x16 pixels.
+GRID_COLS = FRAME_WIDTH // CELL_SIZE  # 32 cells per row.
+GRID_ROWS = FRAME_HEIGHT // CELL_SIZE   # 32 cells per column.
+BITS_PER_FRAME = GRID_COLS * GRID_ROWS   # 1024 bits per frame.
+BYTES_PER_FRAME = BITS_PER_FRAME // 8      # 128 bytes per frame.
+
+# Reed–Solomon parameters:
+ECC_SYMBOLS = 16  # Number of error correction bytes per block.
+DATA_BLOCK_SIZE = BYTES_PER_FRAME - ECC_SYMBOLS  # 112 bytes of actual data per block.
+
+# --- Robust Encoding Function ---
+def robust_encode_file_to_video(input_file, output_video, fps=30):
+    # Read the input file.
     with open(input_file, 'rb') as f:
-        file_bytes = f.read()
-    file_size = len(file_bytes)
+        file_data = f.read()
+    file_size = len(file_data)
+    print("Original file size:", file_size, "bytes")
     
-    # Create a header of 8 bytes that stores the original file size (big-endian)
-    header = struct.pack('>Q', file_size)
-    data = header + file_bytes  # Prepend the header to the file data
-
-    total_bytes = len(data)
-    total_frames = math.ceil(total_bytes / capacity)
-    print("Total file size (with header):", total_bytes, "bytes")
-    print("Capacity per frame:", capacity, "bytes")
-    print("Total frames required:", total_frames)
-
+    # Create a simple header (4 bytes, big-endian) to store file size.
+    header = struct.pack('>I', file_size)
+    full_data = header + file_data
+    
+    # Split the data into chunks of DATA_BLOCK_SIZE bytes; pad the final chunk if needed.
+    chunks = [full_data[i:i+DATA_BLOCK_SIZE] for i in range(0, len(full_data), DATA_BLOCK_SIZE)]
+    if len(chunks[-1]) < DATA_BLOCK_SIZE:
+        chunks[-1] += bytes(DATA_BLOCK_SIZE - len(chunks[-1]))
+    
+    # Initialize the Reed–Solomon encoder.
+    rsc = RSCodec(ECC_SYMBOLS)
+    
+    # Encode each chunk to a 128-byte block.
+    encoded_blocks = []
+    for chunk in chunks:
+        encoded = rsc.encode(chunk)  # Each block is DATA_BLOCK_SIZE + ECC_SYMBOLS = 128 bytes.
+        encoded_blocks.append(encoded)
+    
+    total_frames = len(encoded_blocks)
+    print("Total frames to encode:", total_frames)
+    
     # Set up the video writer.
-    # NOTE: We use the FFV1 codec for lossless encoding. Ensure your OpenCV build supports it.
+    # (Ideally you’d use a lossless codec when testing; note that YouTube will re‑encode this video.)
     fourcc = cv2.VideoWriter_fourcc(*'FFV1')
-    video_writer = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
-    if not video_writer.isOpened():
-        print("Error: Could not open video writer. Check codec support and output path.")
+    out = cv2.VideoWriter(output_video, fourcc, fps, (FRAME_WIDTH, FRAME_HEIGHT))
+    if not out.isOpened():
+        print("Error: Could not open video writer.")
         return
-
-    # Write the file data into successive frames
-    for i in range(total_frames):
-        start = i * capacity
-        end = start + capacity
-        frame_data = data[start:end]
-        # Pad the last frame with zeros if necessary
-        if len(frame_data) < capacity:
-            frame_data += bytes(capacity - len(frame_data))
-        # Convert the bytes into a NumPy array and reshape it to a frame (height, width, 3)
-        frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-        video_writer.write(frame)
-
-    video_writer.release()
-    print(f"Encoding complete. The file '{input_file}' was encoded into '{output_video}'.")
-
-def decode_video_to_file(input_video, output_file):
-    """
-    Decodes a video file (that was created by encode_file_to_video) back into the original file.
     
-    It reads every frame, concatenates all the bytes, then uses the first 8 bytes (header)
-    to determine the size of the original file data.
+    # Process each encoded block.
+    for block in encoded_blocks:
+        # Convert the 128-byte block into a list of 1024 bits.
+        bits = []
+        for byte in block:
+            for i in range(7, -1, -1):
+                bits.append((byte >> i) & 1)
+        if len(bits) != BITS_PER_FRAME:
+            print("Error: Bit length mismatch.")
+            return
+        
+        # Create an empty grayscale frame.
+        frame = np.zeros((FRAME_HEIGHT, FRAME_WIDTH), dtype=np.uint8)
+        bit_index = 0
+        # Fill the frame with cells. Each cell is filled white for a 1 and black for a 0.
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                bit = bits[bit_index]
+                bit_index += 1
+                top = row * CELL_SIZE
+                left = col * CELL_SIZE
+                frame[top:top+CELL_SIZE, left:left+CELL_SIZE] = 255 if bit == 1 else 0
+        
+        # Convert the grayscale frame to BGR (as required by many video codecs).
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        out.write(frame_bgr)
     
-    Args:
-        input_video (str): Path to the encoded video file.
-        output_file (str): Path where the decoded file will be saved.
-    """
+    out.release()
+    print(f"Robust encoding complete. Video saved as '{output_video}'.")
+
+# --- Robust Decoding Function ---
+def robust_decode_video_to_file(input_video, output_file):
     cap = cv2.VideoCapture(input_video)
     if not cap.isOpened():
         print("Error: Could not open video file for decoding.")
         return
-
-    all_bytes = bytearray()
+    
+    rsc = RSCodec(ECC_SYMBOLS)
+    decoded_blocks = []
     frame_count = 0
+    
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        # Convert the frame to bytes and add to our data buffer
-        all_bytes.extend(frame.tobytes())
         frame_count += 1
-
+        # Convert the frame to grayscale.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Extract the bit values from each cell by thresholding.
+        bits = []
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                top = row * CELL_SIZE
+                left = col * CELL_SIZE
+                cell = gray[top:top+CELL_SIZE, left:left+CELL_SIZE]
+                avg_intensity = np.mean(cell)
+                bit = 1 if avg_intensity > 128 else 0
+                bits.append(bit)
+        
+        # Convert the bits back into a 128-byte block.
+        block_bytes = bytearray()
+        for i in range(0, len(bits), 8):
+            byte = 0
+            for j in range(8):
+                byte = (byte << 1) | bits[i+j]
+            block_bytes.append(byte)
+        block_bytes = bytes(block_bytes)
+        
+        # Use Reed–Solomon to decode the block (correcting errors if possible).
+        try:
+            decoded = rsc.decode(block_bytes)
+            # Depending on the library version, decoded might be a tuple; take the message portion.
+            if isinstance(decoded, tuple):
+                decoded = decoded[0]
+        except Exception as e:
+            print(f"Error decoding RS block in frame {frame_count}: {e}")
+            continue  # Skip blocks that couldn’t be corrected.
+        
+        decoded_blocks.append(decoded)
+    
     cap.release()
-    print("Total frames read:", frame_count)
-
-    # Check that we have at least 8 bytes for the header
-    if len(all_bytes) < 8:
-        print("Error: Encoded data is too short to contain a valid header.")
+    print("Total frames processed:", frame_count)
+    
+    if not decoded_blocks:
+        print("No valid blocks were decoded.")
         return
-
-    # The first 8 bytes store the original file size
-    header = all_bytes[:8]
-    file_size = struct.unpack('>Q', header)[0]
-    print("Original file size (from header):", file_size, "bytes")
-
-    # Extract exactly the file_size bytes (after the header)
-    file_data = all_bytes[8:8 + file_size]
+    
+    # Combine the decoded blocks into one data stream.
+    full_data = b''.join(decoded_blocks)
+    if len(full_data) < 4:
+        print("Error: Decoded data is too short to contain a valid header.")
+        return
+    
+    # The first 4 bytes hold the original file size.
+    file_size = struct.unpack('>I', full_data[:4])[0]
+    print("Recovered file size (from header):", file_size, "bytes")
+    
+    file_data = full_data[4:4+file_size]
     with open(output_file, 'wb') as f:
         f.write(file_data)
     
-    print(f"Decoding complete. The video '{input_video}' was decoded into '{output_file}'.")
+    print(f"Robust decoding complete. Recovered file saved as '{output_file}'.")
 
+# --- Command-Line Interface ---
 if __name__ == '__main__':
     import argparse
-
     parser = argparse.ArgumentParser(
-        description="Encode any file into a video and decode a video back into a file."
+        description="Robustly encode a file into a video (aimed at surviving YouTube compression) and decode it back."
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommands: encode, decode")
     
-    # Subparser for encoding
-    parser_encode = subparsers.add_parser("encode", help="Encode a file into a video.")
-    parser_encode.add_argument("input_file", help="Path to the input file to encode.")
+    parser_encode = subparsers.add_parser("encode", help="Encode a file into a robust video.")
+    parser_encode.add_argument("input_file", help="Path to the input file.")
     parser_encode.add_argument("output_video", help="Path to the output video file.")
-    parser_encode.add_argument("--width", type=int, default=512, help="Frame width in pixels (default: 256).")
-    parser_encode.add_argument("--height", type=int, default=512, help="Frame height in pixels (default: 256).")
-    parser_encode.add_argument("--fps", type=int, default=60, help="Frames per second for the video (default: 30).")
+    parser_encode.add_argument("--fps", type=int, default=30, help="Frames per second (default: 30).")
     
-    # Subparser for decoding
-    parser_decode = subparsers.add_parser("decode", help="Decode a video back into a file.")
+    parser_decode = subparsers.add_parser("decode", help="Decode a robust video back into a file.")
     parser_decode.add_argument("input_video", help="Path to the input video file.")
-    parser_decode.add_argument("output_file", help="Path to save the decoded file.")
+    parser_decode.add_argument("output_file", help="Path to save the recovered file.")
     
     args = parser.parse_args()
     
     if args.command == "encode":
-        encode_file_to_video(
-            args.input_file,
-            args.output_video,
-            resolution=(args.width, args.height),
-            fps=args.fps
-        )
+        robust_encode_file_to_video(args.input_file, args.output_video, fps=args.fps)
     elif args.command == "decode":
-        decode_video_to_file(args.input_video, args.output_file)
+        robust_decode_video_to_file(args.input_video, args.output_file)
     else:
         parser.print_help()
