@@ -1,7 +1,7 @@
 # tovideoencoder
 
 ## Overview
-`tovideoencoder` is a tool that encodes any file into an `.mkv` video format using the FFV1 codec.
+`tovideoencoder` is a tool that encodes any file into an `.mkv` video format using the FFV1 codec. But this one is made for youtube lossy compression so you can store unlimited amount of files inside youtube
 
 ## Installation
 Clone the repository:
