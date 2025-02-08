@@ -3,7 +3,7 @@ import numpy as np
 import struct
 import math
 
-def encode_file_to_video(input_file, output_video, resolution=(256, 256), fps=30):
+def encode_file_to_video(input_file, output_video, resolution=(512, 512), fps=60):
     """
     Encodes an arbitrary binary file into a video file.
     
@@ -116,9 +116,9 @@ if __name__ == '__main__':
     parser_encode = subparsers.add_parser("encode", help="Encode a file into a video.")
     parser_encode.add_argument("input_file", help="Path to the input file to encode.")
     parser_encode.add_argument("output_video", help="Path to the output video file.")
-    parser_encode.add_argument("--width", type=int, default=256, help="Frame width in pixels (default: 256).")
-    parser_encode.add_argument("--height", type=int, default=256, help="Frame height in pixels (default: 256).")
-    parser_encode.add_argument("--fps", type=int, default=30, help="Frames per second for the video (default: 30).")
+    parser_encode.add_argument("--width", type=int, default=512, help="Frame width in pixels (default: 256).")
+    parser_encode.add_argument("--height", type=int, default=512, help="Frame height in pixels (default: 256).")
+    parser_encode.add_argument("--fps", type=int, default=60, help="Frames per second for the video (default: 30).")
     
     # Subparser for decoding
     parser_decode = subparsers.add_parser("decode", help="Decode a video back into a file.")
